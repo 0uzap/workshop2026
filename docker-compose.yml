@@ -22,6 +22,61 @@ services:
     networks:
       - resilience-network
 
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+
+    container_name: resilience-backend
+    restart: unless-stopped
+
+    ports:
+      - "3000:3000"
+
+    environment:
+      PORT: 3000
+      DB_HOST: mysql
+      DB_PORT: 3306
+      DB_USER: resilience
+      DB_PASSWORD: ${MYSQL_PASSWORD:?Mot de passe requis}
+      DB_NAME: resilience_db
+      JWT_SECRET: ${JWT_SECRET:?Secret JWT requis}
+
+    depends_on:
+      mysql:
+        condition: service_healthy
+
+    networks:
+      - resilience-network
+
+
+  auth-service:
+    build:
+      context: ./auth-service
+      dockerfile: Dockerfile
+
+    container_name: resilience-auth
+    restart: unless-stopped
+
+    ports:
+      - "127.0.0.1:3001:3001"
+
+    environment:
+      PORT: 3001
+      DB_HOST: mysql
+      DB_PORT: 3306
+      DB_USER: resilience
+      DB_PASSWORD: ${MYSQL_PASSWORD:?Mot de passe requis}
+      DB_NAME: resilience_db
+      JWT_SECRET: ${JWT_SECRET:?Secret JWT requis}
+
+    depends_on:
+      mysql:
+        condition: service_healthy
+
+    networks:
+      - resilience-network
+  
 volumes:
   mysql_data:
 
