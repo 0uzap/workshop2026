@@ -1,0 +1,30 @@
+services:
+  mysql:
+    image: mysql:8.0
+    container_name: resilience-mysql
+    restart: unless-stopped
+
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:?Mot de passe root requis}
+      MYSQL_DATABASE: resilience_db
+      MYSQL_USER: resilience
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:?Mot de passe utilisateur requis}
+
+    volumes:
+      - mysql_data:/var/lib/mysql
+
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h localhost --silent"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+    networks:
+      - resilience-network
+
+volumes:
+  mysql_data:
+
+networks:
+  resilience-network:
+    driver: bridge
