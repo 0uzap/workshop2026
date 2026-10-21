@@ -1,0 +1,46 @@
+{
+  "uid": "resilience-security",
+  "title": "Resilience - Securite (SOC)",
+  "tags": ["securite", "soc", "waf"],
+  "timezone": "browser",
+  "schemaVersion": 41,
+  "refresh": "10s",
+  "time": { "from": "now-1h", "to": "now" },
+  "panels": [
+    {
+      "id": 1, "type": "stat", "title": "Requetes bloquees par le WAF (5 dernieres min)",
+      "gridPos": { "x": 0, "y": 0, "w": 8, "h": 6 },
+      "datasource": { "type": "loki", "uid": "loki" },
+      "targets": [ { "refId": "A", "datasource": { "type": "loki", "uid": "loki" },
+        "expr": "sum(count_over_time({container=\"resilience-waf\"} | json | transaction_is_interrupted=\"true\" [5m])) or vector(0)" } ],
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "background", "graphMode": "none" },
+      "fieldConfig": { "defaults": { "unit": "short", "thresholds": { "mode": "absolute", "steps": [
+        { "color": "green", "value": null }, { "color": "orange", "value": 1 }, { "color": "red", "value": 20 } ] } }, "overrides": [] }
+    },
+    {
+      "id": 2, "type": "timeseries", "title": "Blocages WAF par minute",
+      "gridPos": { "x": 8, "y": 0, "w": 16, "h": 6 },
+      "datasource": { "type": "loki", "uid": "loki" },
+      "targets": [ { "refId": "A", "datasource": { "type": "loki", "uid": "loki" }, "legendFormat": "bloquees",
+        "expr": "sum(count_over_time({container=\"resilience-waf\"} | json | transaction_is_interrupted=\"true\" [1m])) or vector(0)" } ],
+      "fieldConfig": { "defaults": { "unit": "short", "color": { "mode": "fixed", "fixedColor": "red" },
+        "custom": { "drawStyle": "bars", "fillOpacity": 60 } }, "overrides": [] }
+    },
+    {
+      "id": 3, "type": "table", "title": "URI les plus attaquees",
+      "gridPos": { "x": 0, "y": 6, "w": 12, "h": 8 },
+      "datasource": { "type": "loki", "uid": "loki" },
+      "targets": [ { "refId": "A", "datasource": { "type": "loki", "uid": "loki" }, "queryType": "instant", "instant": true, "range": false,
+        "expr": "topk(10, sum by (transaction_request_uri) (count_over_time({container=\"resilience-waf\"} | json | transaction_is_interrupted=\"true\" [$__range])))" } ],
+      "transformations": [ { "id": "reduce", "options": { "reducers": ["lastNotNull"] } } ]
+    },
+    {
+      "id": 4, "type": "logs", "title": "Dernieres requetes bloquees",
+      "gridPos": { "x": 12, "y": 6, "w": 12, "h": 8 },
+      "datasource": { "type": "loki", "uid": "loki" },
+      "targets": [ { "refId": "A", "datasource": { "type": "loki", "uid": "loki" },
+        "expr": "{container=\"resilience-waf\"} | json | transaction_is_interrupted=\"true\" | line_format \"{{.transaction_request_method}} {{.transaction_request_uri}}\"" } ],
+      "options": { "showTime": true, "sortOrder": "Descending", "wrapLogMessage": true }
+    }
+  ]
+}
