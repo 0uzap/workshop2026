@@ -17,7 +17,8 @@ const authenticate = (req, res, next) => {
       process.env.JWT_SECRET,
       {
         algorithms: ['HS256'],
-        issuer: 'resilience-auth'
+        issuer: 'resilience-auth',
+        audience: 'resilience-api'
       }
     );
 
@@ -31,4 +32,21 @@ const authenticate = (req, res, next) => {
   }
 };
 
+// Politique d'authentification forte pour les opérations sensibles :
+// si PAYMENT_REQUIRE_FACE=true, le jeton doit avoir été obtenu avec le visage.
+const requireFaceForPayments = (req, res, next) => {
+  if (process.env.PAYMENT_REQUIRE_FACE !== 'true') {
+    return next();
+  }
+
+  if (!(req.user.amr || []).includes('face')) {
+    return res.status(403).json({
+      error: 'Authentification faciale requise pour effectuer un paiement'
+    });
+  }
+
+  next();
+};
+
 module.exports = authenticate;
+module.exports.requireFaceForPayments = requireFaceForPayments;

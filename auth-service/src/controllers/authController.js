@@ -1,7 +1,14 @@
 
 const bcrypt = require('bcryptjs');
-const jwt = require('jsonwebtoken');
 const pool = require('../config/database');
+const audit = require('../services/audit');
+const { authAttempts } = require('../metrics');
+const { signAccessToken } = require('../security/tokens');
+const { can } = require('../security/permissions');
+
+// Hash factice : la comparaison est faite même si l'utilisateur n'existe pas,
+// pour ne pas révéler les identifiants valides par le temps de réponse.
+const DUMMY_HASH = bcrypt.hashSync('resilience-dummy-password', 12);
 
 const register = async (req, res) => {
   try {
@@ -75,41 +82,37 @@ const login = async (req, res) => {
       [username.trim()]
     );
 
-    if (users.length === 0) {
-      return res.status(401).json({
-        error: 'Identifiants incorrects'
-      });
-    }
-
     const user = users[0];
 
     const validPassword = await bcrypt.compare(
       password,
-      user.password_hash
+      user ? user.password_hash : DUMMY_HASH
     );
 
-    if (!validPassword) {
+    if (!user || !validPassword) {
+      authAttempts.inc({ step: 'password', result: 'failure' });
+      audit(req, 'auth.password.failure', { username: username.trim().slice(0, 100) });
       return res.status(401).json({
         error: 'Identifiants incorrects'
       });
     }
 
-    const token = jwt.sign(
-      {
-        sub: String(user.id),
-        role: user.role
-      },
-      process.env.JWT_SECRET,
-      {
-        expiresIn: '1h',
-        algorithm: 'HS256',
-        issuer: 'resilience-auth'
-      }
-    );
+    // Les comptes du back-office passent obligatoirement par le poste
+    // d'authentification (caméra du PC Hôte) : pas de mot de passe seul
+    if (can(user.role, 'backoffice:access') || !user.is_active) {
+      authAttempts.inc({ step: 'password', result: 'denied' });
+      audit(req, 'auth.password.denied', { user_id: user.id, role: user.role });
+      return res.status(403).json({
+        error: 'Ce compte doit se connecter via le poste d\'authentification du back-office'
+      });
+    }
+
+    authAttempts.inc({ step: 'password', result: 'success' });
+    audit(req, 'auth.login.success', { user_id: user.id, amr: ['pwd'] });
 
     res.json({
       message: 'Connexion réussie',
-      token,
+      token: signAccessToken(user, ['pwd']),
       token_type: 'Bearer',
       expires_in: 3600
     });

@@ -12,6 +12,7 @@ services:
 
     volumes:
       - mysql_data:/var/lib/mysql
+      - ./database/init:/docker-entrypoint-initdb.d:ro
 
     healthcheck:
       test: ["CMD-SHELL", "mysqladmin ping -h localhost --silent"]
@@ -41,6 +42,7 @@ services:
       DB_PASSWORD: ${MYSQL_PASSWORD:?Mot de passe requis}
       DB_NAME: resilience_db
       JWT_SECRET: ${JWT_SECRET:?Secret JWT requis}
+      PAYMENT_REQUIRE_FACE: ${PAYMENT_REQUIRE_FACE:-false}
 
     depends_on:
       mysql:
@@ -69,14 +71,86 @@ services:
       DB_PASSWORD: ${MYSQL_PASSWORD:?Mot de passe requis}
       DB_NAME: resilience_db
       JWT_SECRET: ${JWT_SECRET:?Secret JWT requis}
+      FACE_SERVICE_URL: http://face-service:8000
+      FACE_SERVICE_TOKEN: ${FACE_SERVICE_TOKEN:?Jeton interne face-service requis}
+      FACE_TEMPLATE_KEY: ${FACE_TEMPLATE_KEY:?Cle de chiffrement des gabarits requise}
+      # Agent caméra natif Windows (camera-agent/), écoute sur 127.0.0.1 du PC Hôte
+      CAMERA_AGENT_URL: http://host.docker.internal:${CAMERA_AGENT_PORT:-8765}
+      CAMERA_AGENT_TOKEN: ${CAMERA_AGENT_TOKEN:?Jeton agent camera requis}
+      # Jeton du module LED ESP8266
+      IOT_DEVICE_TOKEN: ${IOT_DEVICE_TOKEN:?Jeton du module IoT requis}
+
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
 
     depends_on:
       mysql:
         condition: service_healthy
+      face-service:
+        condition: service_healthy
 
     networks:
       - resilience-network
-  
+      - face-network
+
+  # Analyse faciale : interne uniquement (aucun port publié, réseau isolé),
+  # sans état, sans accès à la base ni à Internet.
+  face-service:
+    build:
+      context: ./face-service
+      dockerfile: Dockerfile
+
+    container_name: resilience-face
+    restart: unless-stopped
+
+    environment:
+      FACE_SERVICE_TOKEN: ${FACE_SERVICE_TOKEN:?Jeton interne face-service requis}
+
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 768m
+
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+    networks:
+      - face-network
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+
+    container_name: resilience-frontend
+    restart: unless-stopped
+
+    ports:
+      - "${FRONTEND_PORT:-8080}:8080"
+
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+
+    depends_on:
+      - auth-service
+      - backend
+
+    networks:
+      - resilience-network
+
 
 
   prometheus:
@@ -100,6 +174,7 @@ services:
 
     networks:
       - resilience-network
+      - face-network
 
 
   grafana:
@@ -168,5 +243,8 @@ volumes:
 networks:
   resilience-network:
     driver: bridge
+  face-network:
+    driver: bridge
+    internal: true
 
 
