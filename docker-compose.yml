@@ -108,6 +108,8 @@ services:
       GF_USERS_ALLOW_SIGN_UP: "false"
     volumes:
       - grafana_data:/var/lib/grafana
+      - ./infrastructure/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./infrastructure/grafana/dashboards:/etc/grafana/dashboards:ro
     security_opt: ["no-new-privileges:true"]
     cap_drop: [ALL]
     depends_on: [prometheus]
