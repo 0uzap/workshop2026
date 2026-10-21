@@ -1,38 +1,46 @@
 services:
+  waf:
+    image: owasp/modsecurity-crs:nginx-alpine
+    container_name: resilience-waf
+    restart: unless-stopped
+    environment:
+      BACKEND: http://backend:3000
+      PORT: "8080"
+      PARANOIA: "1"
+      BLOCKING_PARANOIA: "1"
+      ANOMALY_INBOUND: "5"
+      ANOMALY_OUTBOUND: "4"
+    ports:
+      - "${WAF_BIND:-127.0.0.1}:8088:8080"
+    security_opt: ["no-new-privileges:true"]
+    depends_on: [backend]
+    networks: [front]
+
   mysql:
     image: mysql:8.0
     container_name: resilience-mysql
     restart: unless-stopped
-
     environment:
       MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:?Mot de passe root requis}
       MYSQL_DATABASE: resilience_db
       MYSQL_USER: resilience
       MYSQL_PASSWORD: ${MYSQL_PASSWORD:?Mot de passe utilisateur requis}
-
     volumes:
       - mysql_data:/var/lib/mysql
-
     healthcheck:
       test: ["CMD-SHELL", "mysqladmin ping -h localhost --silent"]
       interval: 10s
       timeout: 5s
       retries: 10
-
-    networks:
-      - resilience-network
+    security_opt: ["no-new-privileges:true"]
+    networks: [data]
 
   backend:
     build:
       context: ./backend
       dockerfile: Dockerfile
-
     container_name: resilience-backend
     restart: unless-stopped
-
-    ports:
-      - "3000:3000"
-
     environment:
       PORT: 3000
       DB_HOST: mysql
@@ -41,26 +49,21 @@ services:
       DB_PASSWORD: ${MYSQL_PASSWORD:?Mot de passe requis}
       DB_NAME: resilience_db
       JWT_SECRET: ${JWT_SECRET:?Secret JWT requis}
-
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: [ALL]
     depends_on:
       mysql:
         condition: service_healthy
-
-    networks:
-      - resilience-network
-
+    networks: [front, data, obs]
 
   auth-service:
     build:
       context: ./auth-service
       dockerfile: Dockerfile
-
     container_name: resilience-auth
     restart: unless-stopped
-
     ports:
       - "127.0.0.1:3001:3001"
-
     environment:
       PORT: 3001
       DB_HOST: mysql
@@ -69,95 +72,81 @@ services:
       DB_PASSWORD: ${MYSQL_PASSWORD:?Mot de passe requis}
       DB_NAME: resilience_db
       JWT_SECRET: ${JWT_SECRET:?Secret JWT requis}
-
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: [ALL]
     depends_on:
       mysql:
         condition: service_healthy
-
-    networks:
-      - resilience-network
-  
-
+    networks: [front, data, obs]
 
   prometheus:
     image: prom/prometheus:v3.5.0
     container_name: resilience-prometheus
     restart: unless-stopped
-
     ports:
       - "127.0.0.1:9090:9090"
-
     volumes:
       - ./infrastructure/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
       - prometheus_data:/prometheus
-
     command:
       - '--config.file=/etc/prometheus/prometheus.yml'
       - '--storage.tsdb.path=/prometheus'
-
-    depends_on:
-      - backend
-
-    networks:
-      - resilience-network
-
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: [ALL]
+    depends_on: [backend]
+    networks: [obs]
 
   grafana:
     image: grafana/grafana:12.1.1
     container_name: resilience-grafana
     restart: unless-stopped
-
     ports:
       - "127.0.0.1:3002:3000"
-
     environment:
       GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:?Utilisateur Grafana requis}
       GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:?Mot de passe Grafana requis}
       GF_USERS_ALLOW_SIGN_UP: "false"
-
     volumes:
       - grafana_data:/var/lib/grafana
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: [ALL]
+    depends_on: [prometheus]
+    networks: [obs]
 
-    depends_on:
-      - prometheus
-
-    networks:
-      - resilience-network
-
-  
   loki:
     image: grafana/loki:3.5.0
     container_name: resilience-loki
     restart: unless-stopped
-
     command: -config.file=/etc/loki/local-config.yaml
-
     volumes:
       - ./infrastructure/loki/loki-config.yml:/etc/loki/local-config.yaml:ro
       - loki_data:/loki
-
-    networks:
-      - resilience-network
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: [ALL]
+    networks: [obs]
 
   alloy:
     image: grafana/alloy:v1.10.2
     container_name: resilience-alloy
     restart: unless-stopped
-
-    command:
-      - run
-      - /etc/alloy/config.alloy
-
+    command: [run, /etc/alloy/config.alloy]
     volumes:
       - ./infrastructure/alloy/config.alloy:/etc/alloy/config.alloy:ro
-      - /var/run/docker.sock:/var/run/docker.sock:ro
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: [ALL]
+    depends_on: [loki, socket-proxy-ro]
+    networks: [obs, docker-api]
 
-    depends_on:
-      - loki
-
-    networks:
-      - resilience-network
-
+  socket-proxy-ro:
+    image: tecnativa/docker-socket-proxy:v0.4.2
+    container_name: resilience-socket-proxy-ro
+    restart: unless-stopped
+    environment:
+      CONTAINERS: "1"
+      POST: "0"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    networks: [docker-api]
 
 volumes:
   mysql_data:
@@ -166,7 +155,9 @@ volumes:
   loki_data:
 
 networks:
-  resilience-network:
-    driver: bridge
-
-
+  front:
+  data:
+    internal: true
+  obs:
+  docker-api:
+    internal: true
