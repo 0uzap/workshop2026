@@ -210,9 +210,9 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock
     networks: [docker-api]
 
-  # Acces Docker RESTREINT pour le moteur de remediation : lire l'etat des
+  # Acces Docker RESTREINT pour le moteur de remediation : agir sur les
   # conteneurs, les (re)demarrer et envoyer HUP au WAF. Rien d'autre
-  # (pas de creation de conteneur, d'exec, d'images, de volumes ni de suppression).
+  # (lecture via socket-proxy-ro ; pas de creation de conteneur, d'exec, d'images, de volumes ni de suppression).
   socket-proxy-remediation:
     image: tecnativa/docker-socket-proxy:v0.4.2
     container_name: resilience-socket-proxy-remediation
