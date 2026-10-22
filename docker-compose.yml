@@ -210,6 +210,22 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock
     networks: [docker-api]
 
+  # Acces Docker RESTREINT pour le moteur de remediation : lire l'etat des
+  # conteneurs, les (re)demarrer et envoyer HUP au WAF. Rien d'autre
+  # (pas de creation de conteneur, d'exec, d'images, de volumes ni de suppression).
+  socket-proxy-remediation:
+    image: tecnativa/docker-socket-proxy:v0.4.2
+    container_name: resilience-socket-proxy-remediation
+    restart: unless-stopped
+    environment:
+      CONTAINERS: "0"
+      POST: "1"
+      ALLOW_RESTARTS: "1"
+      ALLOW_START: "1"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    networks: [remediation-docker]
+
 volumes:
   mysql_data:
   prometheus_data:
@@ -225,6 +241,8 @@ networks:
     internal: true
   obs:              # supervision
   face-network:     # auth <-> analyse faciale, sans sortie
+    internal: true
+  remediation-docker: # API Docker filtree pour le moteur de remediation, sans sortie
     internal: true
   docker-api:       # API Docker filtree, sans sortie
     internal: true
