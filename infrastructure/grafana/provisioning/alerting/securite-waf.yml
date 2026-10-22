@@ -1,0 +1,36 @@
+apiVersion: 1
+groups:
+  - orgId: 1
+    name: securite-waf
+    folder: Resilience
+    interval: 30s
+    rules:
+      - uid: waf-pic-blocages
+        title: "WAF : pic de requetes bloquees"
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange: { from: 300, to: 0 }
+            datasourceUid: loki
+            model:
+              refId: A
+              queryType: range
+              expr: 'sum(count_over_time({container="resilience-waf"} | json | transaction_is_interrupted="true" [1m]))'
+          - refId: B
+            datasourceUid: __expr__
+            model: { refId: B, type: reduce, expression: A, reducer: last }
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              type: threshold
+              expression: B
+              conditions:
+                - evaluator: { type: gt, params: [10] }
+        noDataState: OK
+        execErrState: Error
+        for: 0s
+        labels: { severity: critical, team: blue }
+        annotations:
+          summary: "Plus de 10 requetes bloquees par le WAF en 1 minute"
+          description: "Attaque applicative probable (injection, XSS). Voir le dashboard Resilience - Securite (SOC)."

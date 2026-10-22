@@ -1,7 +1,7 @@
 apiVersion: 1
 datasources:
   - name: Prometheus
-    uid: prometheus
+    uid: eg1p35ljil98gf
     type: prometheus
     url: http://prometheus:9090
     isDefault: true
