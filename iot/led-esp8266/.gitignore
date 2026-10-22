@@ -1,0 +1,5 @@
+.pio/
+.vscode/
+cmake-build-*/
+CMakeListsPrivate.txt
+include/secrets.h

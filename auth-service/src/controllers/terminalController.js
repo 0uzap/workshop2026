@@ -1,0 +1,224 @@
+const bcrypt = require('bcryptjs');
+const pool = require('../config/database');
+const terminal = require('../terminal');
+const audit = require('../services/audit');
+const { encryptTemplate } = require('../security/templateCrypto');
+const { TerminalError } = require('../terminal/createTerminal');
+const { signAccessToken } = require('../security/tokens');
+const { authAttempts } = require('../metrics');
+
+// La session du poste circule dans un en-tête dédié, jamais dans l'URL
+const sessionId = (req) => req.get('x-terminal-session') || '';
+
+const handleError = (res, error) => {
+  if (error instanceof TerminalError) {
+    return res.status(error.status).json({ error: error.message, ...error.extra });
+  }
+  console.error(error);
+  res.status(500).json({ error: 'Erreur du poste d\'authentification' });
+};
+
+/** Étape 1 : saisie de l'identifiant, allumage de la caméra. */
+const identify = async (req, res) => {
+  const { username } = req.body || {};
+
+  if (typeof username !== 'string' || username.trim().length < 1 || username.trim().length > 100) {
+    return res.status(400).json({ error: 'Identifiant requis' });
+  }
+
+  try {
+    res.json(await terminal.identify(username, {
+      ip: req.ip,
+      user_agent: (req.get('user-agent') || '').slice(0, 200)
+    }));
+  } catch (error) {
+    handleError(res, error);
+  }
+};
+
+/** Suivi de l'identification (sondé par le navigateur). */
+const state = (req, res) => {
+  const current = terminal.state(sessionId(req));
+  if (!current) return res.status(404).json({ error: 'Session terminée' });
+  res.json(current);
+};
+
+/** Image courante de la caméra du PC Hôte, pendant l'identification. */
+const frame = async (req, res) => {
+  try {
+    const jpeg = await terminal.frame(sessionId(req));
+    if (!jpeg) return res.status(404).end();
+    res.set('Cache-Control', 'no-store').type('image/jpeg').send(jpeg);
+  } catch (error) {
+    res.status(503).end();
+  }
+};
+
+/** Étape 2 : mot de passe, uniquement après reconnaissance du visage. */
+const password = async (req, res) => {
+  try {
+    const user = await terminal.submitPassword(sessionId(req), req.body?.password);
+    authAttempts.inc({ step: 'terminal', result: 'success' });
+
+    res.json({
+      message: 'Connexion réussie',
+      token: signAccessToken(user, ['face', 'pwd']),
+      token_type: 'Bearer',
+      expires_in: 3600
+    });
+  } catch (error) {
+    authAttempts.inc({ step: 'terminal', result: 'failure' });
+    handleError(res, error);
+  }
+};
+
+// ---------------------------------------------------------------- création de compte
+
+const QUALITY_MESSAGES = {
+  no_face: 'Aucun visage détecté',
+  multiple_faces: 'Plusieurs visages détectés : une seule personne devant la caméra',
+  face_too_small: 'Approchez-vous de la caméra',
+  too_blurry: 'Image trop floue, restez immobile',
+  low_confidence: 'Visage mal éclairé ou partiellement masqué',
+  enroll_not_frontal: 'Regardez la caméra de face',
+  enroll_inconsistent: 'Restez immobile pendant la capture'
+};
+
+const validUsername = (username) =>
+  typeof username === 'string' &&
+  /^[A-Za-z0-9._-]{3,100}$/.test(username.trim());
+
+const validPassword = (password) =>
+  typeof password === 'string' &&
+  password.length >= 12 &&
+  Buffer.byteLength(password, 'utf8') <= 72;
+
+/** Étape 1 : identifiant choisi, allumage de la caméra du poste. */
+const registerStart = async (req, res) => {
+  const { username } = req.body || {};
+
+  if (!validUsername(username)) {
+    return res.status(400).json({
+      error: 'Identifiant invalide : 3 à 100 caractères (lettres, chiffres, . _ -)'
+    });
+  }
+
+  try {
+    const [existing] = await pool.query('SELECT id FROM users WHERE username = ?', [username.trim()]);
+    if (existing.length > 0) {
+      return res.status(409).json({ error: 'Cet identifiant est déjà utilisé' });
+    }
+
+    res.json(await terminal.startRegistration(username, {
+      ip: req.ip,
+      user_agent: (req.get('user-agent') || '').slice(0, 200)
+    }));
+  } catch (error) {
+    handleError(res, error);
+  }
+};
+
+/**
+ * Étape 2 : capture du visage et création du compte.
+ * Le tout premier compte devient administrateur (amorçage du back-office) ;
+ * les suivants attendent la validation d'un administrateur, qui leur
+ * attribue un rôle.
+ */
+const registerComplete = async (req, res) => {
+  const { password, consent } = req.body || {};
+
+  if (!validPassword(password)) {
+    return res.status(400).json({ error: 'Mot de passe trop court (12 caractères minimum)' });
+  }
+
+  if (consent !== true) {
+    return res.status(400).json({
+      error: 'Le consentement au traitement biométrique est requis'
+    });
+  }
+
+  try {
+    // L'identifiant est celui vérifié à l'étape 1, conservé dans la session
+    const result = await terminal.captureRegistration(sessionId(req));
+    const { username } = result;
+
+    if (!result.ok) {
+      return res.status(422).json({
+        error: QUALITY_MESSAGES[result.reason] || 'Image inexploitable, recommencez',
+        reason: result.reason
+      });
+    }
+
+    const connection = await pool.getConnection();
+    let userId;
+    let firstAdmin;
+
+    try {
+      await connection.beginTransaction();
+
+      const [admins] = await connection.query(
+        "SELECT id FROM users WHERE role = 'admin' AND is_active = 1 FOR UPDATE"
+      );
+      firstAdmin = admins.length === 0;
+
+      const [created] = await connection.query(
+        `INSERT INTO users (username, password_hash, role, is_active, pending_approval)
+         VALUES (?, ?, ?, ?, ?)`,
+        [
+          username,
+          await bcrypt.hash(password, 12),
+          firstAdmin ? 'admin' : 'user',
+          firstAdmin ? 1 : 0,
+          firstAdmin ? 0 : 1
+        ]
+      );
+      userId = created.insertId;
+
+      await connection.query(
+        'INSERT INTO face_templates (user_id, template_enc, consent_at) VALUES (?, ?, NOW())',
+        [userId, encryptTemplate(userId, result.template)]
+      );
+
+      await connection.commit();
+    } catch (error) {
+      await connection.rollback();
+      throw error;
+    } finally {
+      connection.release();
+    }
+
+    audit(req, 'terminal.register.success', {
+      user_id: userId,
+      username,
+      first_admin: firstAdmin
+    });
+
+    res.status(201).json({
+      message: firstAdmin
+        ? 'Compte administrateur créé : vous pouvez vous connecter'
+        : 'Compte créé : un administrateur doit le valider avant votre première connexion',
+      pending_approval: !firstAdmin
+    });
+  } catch (error) {
+    if (error.code === 'ER_DUP_ENTRY') {
+      return res.status(409).json({ error: 'Cet identifiant est déjà utilisé' });
+    }
+    handleError(res, error);
+  }
+};
+
+const cancel = async (req, res) => {
+  await terminal.cancel(sessionId(req));
+  res.status(204).end();
+};
+
+module.exports = {
+  identify,
+  state,
+  frame,
+  password,
+  cancel,
+  registerStart,
+  registerComplete,
+  handleError
+};

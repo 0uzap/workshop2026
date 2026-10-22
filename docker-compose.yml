@@ -1,19 +1,35 @@
 services:
+  # ---------- Entree unique : WAF devant le frontal ----------
   waf:
     image: owasp/modsecurity-crs:nginx-alpine
     container_name: resilience-waf
     restart: unless-stopped
     environment:
-      BACKEND: http://backend:3000
+      BACKEND: http://frontend:8080
       PORT: "8080"
       PARANOIA: "1"
       BLOCKING_PARANOIA: "1"
       ANOMALY_INBOUND: "5"
       ANOMALY_OUTBOUND: "4"
     ports:
-      - "${WAF_BIND:-127.0.0.1}:8088:8080"
+      - "${WAF_BIND:-127.0.0.1}:${WAF_PORT:-8088}:8080"
     security_opt: ["no-new-privileges:true"]
-    depends_on: [backend]
+    depends_on: [frontend]
+    networks: [front]
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: resilience-frontend
+    restart: unless-stopped
+    # Plus de port publie : acces uniquement via le WAF
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    depends_on: [auth-service, backend]
     networks: [front]
 
   mysql:
@@ -27,6 +43,7 @@ services:
       MYSQL_PASSWORD: ${MYSQL_PASSWORD:?Mot de passe utilisateur requis}
     volumes:
       - mysql_data:/var/lib/mysql
+      - ./database/init:/docker-entrypoint-initdb.d:ro
     healthcheck:
       test: ["CMD-SHELL", "mysqladmin ping -h localhost --silent"]
       interval: 10s
@@ -49,6 +66,7 @@ services:
       DB_PASSWORD: ${MYSQL_PASSWORD:?Mot de passe requis}
       DB_NAME: resilience_db
       JWT_SECRET: ${JWT_SECRET:?Secret JWT requis}
+      PAYMENT_REQUIRE_FACE: ${PAYMENT_REQUIRE_FACE:-false}
     security_opt: ["no-new-privileges:true"]
     cap_drop: [ALL]
     depends_on:
@@ -63,7 +81,7 @@ services:
     container_name: resilience-auth
     restart: unless-stopped
     ports:
-      - "127.0.0.1:3001:3001"
+      - "127.0.0.1:3001:3001"   # debug local, a retirer avant la demo
     environment:
       PORT: 3001
       DB_HOST: mysql
@@ -72,19 +90,55 @@ services:
       DB_PASSWORD: ${MYSQL_PASSWORD:?Mot de passe requis}
       DB_NAME: resilience_db
       JWT_SECRET: ${JWT_SECRET:?Secret JWT requis}
+      FACE_SERVICE_URL: http://face-service:8000
+      FACE_SERVICE_TOKEN: ${FACE_SERVICE_TOKEN:?Jeton interne face-service requis}
+      FACE_TEMPLATE_KEY: ${FACE_TEMPLATE_KEY:?Cle de chiffrement des gabarits requise}
+      # Agent camera natif Windows (camera-agent/), ecoute sur 127.0.0.1 du PC Hote
+      CAMERA_AGENT_URL: http://host.docker.internal:${CAMERA_AGENT_PORT:-8765}
+      CAMERA_AGENT_TOKEN: ${CAMERA_AGENT_TOKEN:?Jeton agent camera requis}
+      # Jeton du module LED ESP8266
+      IOT_DEVICE_TOKEN: ${IOT_DEVICE_TOKEN:?Jeton du module IoT requis}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     security_opt: ["no-new-privileges:true"]
     cap_drop: [ALL]
     depends_on:
       mysql:
         condition: service_healthy
-    networks: [front, data, obs]
+      face-service:
+        condition: service_healthy
+    networks: [front, data, obs, face-network]
+
+  # Analyse faciale : interne uniquement (aucun port publie, reseau isole),
+  # sans etat, sans acces a la base ni a Internet.
+  face-service:
+    build:
+      context: ./face-service
+      dockerfile: Dockerfile
+    container_name: resilience-face
+    restart: unless-stopped
+    environment:
+      FACE_SERVICE_TOKEN: ${FACE_SERVICE_TOKEN:?Jeton interne face-service requis}
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    mem_limit: 768m
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    networks: [face-network]
 
   prometheus:
     image: prom/prometheus:v3.5.0
     container_name: resilience-prometheus
     restart: unless-stopped
     ports:
-      - "127.0.0.1:9090:9090"
+      - "127.0.0.1:9090:9090"   # debug local, a retirer avant la demo
     volumes:
       - ./infrastructure/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
       - prometheus_data:/prometheus
@@ -94,7 +148,7 @@ services:
     security_opt: ["no-new-privileges:true"]
     cap_drop: [ALL]
     depends_on: [backend]
-    networks: [obs]
+    networks: [obs, face-network]
 
   grafana:
     image: grafana/grafana:12.1.1
@@ -139,6 +193,8 @@ services:
     depends_on: [loki, socket-proxy-ro]
     networks: [obs, docker-api]
 
+  # Acces Docker en LECTURE SEULE pour Alloy (conteneurs, logs, reseaux).
+  # Monter docker.sock en :ro ne restreint pas l'API : c'est ce proxy qui filtre.
   socket-proxy-ro:
     image: tecnativa/docker-socket-proxy:v0.4.2
     container_name: resilience-socket-proxy-ro
@@ -158,9 +214,11 @@ volumes:
   loki_data:
 
 networks:
-  front:
-  data:
+  front:            # WAF <-> frontal <-> API / auth
+  data:             # acces a MySQL, sans sortie
     internal: true
-  obs:
-  docker-api:
+  obs:              # supervision
+  face-network:     # auth <-> analyse faciale, sans sortie
+    internal: true
+  docker-api:       # API Docker filtree, sans sortie
     internal: true
