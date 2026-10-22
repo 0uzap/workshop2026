@@ -1,0 +1,12 @@
+---
+# Racine du depot (deux niveaux au-dessus de ce playbook)
+project_root: "{{ playbook_dir }}/../.."
+
+# Services metier a sonder apres deploiement (nom de conteneur + URL de sante locale)
+health_checks:
+  - { name: remediation, url: "http://127.0.0.1:9095/health" }
+  - { name: ml-detector, url: "http://127.0.0.1:9095/status" }
+
+# Conteneurs geres
+waf_container: resilience-waf
+mysql_container: resilience-mysql

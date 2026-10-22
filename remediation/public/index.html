@@ -1,0 +1,95 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Remédiation — Supervision</title>
+  <style>
+    :root { color-scheme: dark; }
+    * { box-sizing: border-box; }
+    body { margin: 0; font: 14px system-ui, sans-serif; background: #0f172a; color: #e2e8f0; padding: 24px; }
+    h1 { font-size: 20px; margin: 0 0 4px; }
+    .sub { color: #94a3b8; margin-bottom: 20px; }
+    .grid { display: grid; gap: 12px; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); margin-bottom: 24px; }
+    .card { border: 1px solid #1e293b; border-radius: 12px; padding: 16px; background: #0b1220; }
+    .card h2 { font-size: 15px; margin: 0 0 8px; }
+    .badge { display: inline-block; padding: 3px 10px; border-radius: 999px; font-size: 12px; font-weight: 600; }
+    .healthy { background: #064e3b; color: #6ee7b7; }
+    .degraded, .verifying { background: #713f12; color: #fcd34d; }
+    .remediating { background: #1e3a8a; color: #93c5fd; }
+    .escalated { background: #7f1d1d; color: #fca5a5; }
+    .waf { margin-bottom: 20px; }
+    .on { background: #7f1d1d; color: #fca5a5; }
+    .off { background: #1e293b; color: #94a3b8; }
+    table { width: 100%; border-collapse: collapse; font-size: 13px; }
+    th { text-align: left; color: #94a3b8; font-weight: 500; padding: 6px 8px; border-bottom: 1px solid #1e293b; }
+    td { padding: 6px 8px; border-bottom: 1px solid #111b2e; }
+    .ok { color: #6ee7b7; } .ko { color: #fca5a5; } .mut { color: #64748b; }
+    .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; }
+  </style>
+</head>
+<body>
+  <h1>Moteur de remédiation — reprise autonome</h1>
+  <div class="sub">Rafraîchi toutes les secondes · <span id="clock"></span></div>
+
+  <div class="waf">
+    Limite de débit WAF : <span id="waf" class="badge off">—</span>
+  </div>
+
+  <div id="cards" class="grid"></div>
+
+  <h2 style="font-size:15px">Incidents récents</h2>
+  <table>
+    <thead>
+      <tr><th>Service</th><th>Type</th><th>Cause</th><th>Actions</th><th>Résultat</th><th>Durée</th><th>Détecté</th></tr>
+    </thead>
+    <tbody id="history"></tbody>
+  </table>
+
+<script>
+const STATE_LABELS = {
+  healthy: 'Sain', degraded: 'Dégradé', remediating: 'Remédiation',
+  verifying: 'Vérification', escalated: 'Escalade (humain)'
+};
+const OUTCOME = { recovered: ['Rétabli', 'ok'], escalated: ['Escaladé', 'ko'] };
+
+const fmt = (ms) => ms == null ? '—' : (ms / 1000).toFixed(1) + ' s';
+const time = (ts) => new Date(ts).toLocaleTimeString('fr-FR');
+
+async function refresh() {
+  let s;
+  try { s = await (await fetch('/status', { cache: 'no-store' })).json(); }
+  catch { return; }
+
+  document.getElementById('clock').textContent = new Date().toLocaleTimeString('fr-FR');
+
+  const waf = document.getElementById('waf');
+  waf.textContent = s.wafRateLimited ? 'ACTIVE' : 'inactive';
+  waf.className = 'badge ' + (s.wafRateLimited ? 'on' : 'off');
+
+  document.getElementById('cards').innerHTML = s.targets.map((t) => `
+    <div class="card">
+      <h2>${t.label}</h2>
+      <span class="badge ${t.state}">${STATE_LABELS[t.state] || t.state}</span>
+      ${t.incident ? `<p class="ko" style="margin:10px 0 0">Incident : ${t.incident.reason}</p>` : ''}
+    </div>`).join('');
+
+  document.getElementById('history').innerHTML = (s.history || []).map((i) => {
+    const [label, cls] = OUTCOME[i.outcome] || [i.outcome || '…', 'mut'];
+    return `<tr>
+      <td>${i.label || i.target}</td>
+      <td>${i.type}</td>
+      <td>${i.reason}</td>
+      <td class="mut">${(i.actions || []).join(', ') || '—'}</td>
+      <td class="${cls}">${label}</td>
+      <td>${fmt(i.durationMs)}</td>
+      <td class="mut">${time(i.detectedAt)}</td>
+    </tr>`;
+  }).join('') || '<tr><td colspan="7" class="mut">Aucun incident</td></tr>';
+}
+
+refresh();
+setInterval(refresh, 1000);
+</script>
+</body>
+</html>

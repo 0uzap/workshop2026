@@ -9,3 +9,6 @@ __pycache__/
 .venv/
 *.log
 security/waf/ratelimit/state/*.conf
+
+# Etat runtime de l'interrupteur de limite WAF (pose par la remediation)
+security/waf/ratelimit/state/active.conf

@@ -21,10 +21,15 @@ export default function UsersTab({ token, me }) {
   const [form, setForm] = useState({ username: '', password: '', role: 'operator' });
   const [passwordFor, setPasswordFor] = useState(null);
   const [newPassword, setNewPassword] = useState('');
+  // Rôle choisi pour chaque compte en attente, avant validation
+  const [pendingRole, setPendingRole] = useState({});
 
   const canWrite = me.permissions.includes('users:write');
   const canFaces = me.permissions.includes('faces:manage');
   const canUnlock = me.permissions.includes('locks:manage');
+
+  // Un compte créé au poste a un visage : il est destiné au back-office
+  const backofficeRoles = roles.filter((r) => r !== 'user');
 
   const load = useCallback(() => {
     api('/api/auth/admin/users', { token })
@@ -100,7 +105,16 @@ export default function UsersTab({ token, me }) {
                   {u.id === me.id && <span className="ml-1 text-xs text-slate-500">(vous)</span>}
                 </td>
                 <td className="py-2 pr-3">
-                  {canWrite ? (
+                  {canWrite && u.pending_approval ? (
+                    // Compte créé au poste : on choisit le rôle à attribuer à la validation
+                    <select
+                      className="rounded border border-slate-700 bg-slate-900 px-1 py-0.5"
+                      value={pendingRole[u.id] || 'operator'}
+                      onChange={(e) => setPendingRole({ ...pendingRole, [u.id]: e.target.value })}
+                    >
+                      {backofficeRoles.map((r) => <option key={r} value={r}>{ROLE_LABELS[r] || r}</option>)}
+                    </select>
+                  ) : canWrite ? (
                     <select
                       className="rounded border border-slate-700 bg-slate-900 px-1 py-0.5"
                       value={u.role}
@@ -142,9 +156,11 @@ export default function UsersTab({ token, me }) {
                   {canWrite && u.pending_approval ? (
                     <button
                       className={`${smallButton} border-emerald-700 text-emerald-300`}
-                      disabled={u.role === 'user'}
-                      title={u.role === 'user' ? 'Choisissez d’abord un rôle du back-office' : ''}
-                      onClick={() => update(u, { is_active: true }, `Compte ${u.username} validé`)}
+                      onClick={() => update(
+                        u,
+                        { role: pendingRole[u.id] || 'operator', is_active: true },
+                        `Compte ${u.username} validé`
+                      )}
                     >
                       Valider le compte
                     </button>

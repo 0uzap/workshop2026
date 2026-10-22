@@ -1,0 +1,32 @@
+---
+# Recette : verifie que les services repondent.
+#   ansible-playbook smoke.yml
+- name: Recette de la plateforme
+  hosts: pc_hote
+  gather_facts: false
+
+  tasks:
+    - name: Sonder les services
+      ansible.builtin.uri:
+        url: "{{ item.url }}"
+        status_code: [200]
+      register: probe
+      retries: 10
+      delay: 2
+      until: probe.status == 200
+      loop: "{{ health_checks }}"
+      loop_control:
+        label: "{{ item.name }}"
+
+    - name: Verifier que le moteur de remediation voit les services sains
+      ansible.builtin.uri:
+        url: "http://127.0.0.1:9095/status"
+        return_content: true
+      register: remediation
+
+    - name: Aucun service en escalade
+      ansible.builtin.assert:
+        that:
+          - "'escalated' not in (remediation.json.targets | map(attribute='state') | list)"
+        success_msg: "Tous les services sont pris en charge (aucune escalade)."
+        fail_msg: "Un service est en escalade : intervention requise."

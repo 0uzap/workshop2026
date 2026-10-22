@@ -1,0 +1,15 @@
+{
+  "name": "remediation",
+  "version": "1.0.0",
+  "description": "Moteur de remediation autonome (zero-touch recovery)",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js",
+    "test": "node --test test/*.test.js"
+  },
+  "dependencies": {
+    "dockerode": "^4.0.2",
+    "express": "^4.21.2",
+    "prom-client": "^15.1.3"
+  }
+}

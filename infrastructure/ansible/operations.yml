@@ -1,0 +1,78 @@
+---
+# Operations d'exploitation, selectionnees par tag :
+#   ansible-playbook operations.yml --tags restart   -e service=resilience-backend
+#   ansible-playbook operations.yml --tags waf-on
+#   ansible-playbook operations.yml --tags waf-off
+#   ansible-playbook operations.yml --tags backup
+#   ansible-playbook operations.yml --tags diagnostics
+- name: Operations sur la plateforme
+  hosts: pc_hote
+  gather_facts: false
+
+  tasks:
+    # --- Redemarrage cible d'un service ---------------------------------
+    - name: Redemarrer un service
+      community.docker.docker_container:
+        name: "{{ service | mandatory }}"
+        state: started
+        restart: true
+      tags: [never, restart]
+
+    # --- Interrupteur de limite de debit du WAF -------------------------
+    - name: Activer la limite de debit du WAF
+      block:
+        - name: Deposer l'etat actif
+          ansible.builtin.copy:
+            src: "{{ project_root }}/security/waf/ratelimit/limits.on.conf"
+            dest: "{{ project_root }}/security/waf/ratelimit/state/active.conf"
+            mode: "0644"
+        - name: Recharger nginx (HUP)
+          community.docker.docker_container_exec:
+            container: "{{ waf_container }}"
+            command: nginx -s reload
+      tags: [never, waf-on]
+
+    - name: Desactiver la limite de debit du WAF
+      block:
+        - name: Retirer l'etat actif
+          ansible.builtin.file:
+            path: "{{ project_root }}/security/waf/ratelimit/state/active.conf"
+            state: absent
+        - name: Recharger nginx (HUP)
+          community.docker.docker_container_exec:
+            container: "{{ waf_container }}"
+            command: nginx -s reload
+      tags: [never, waf-off]
+
+    # --- Sauvegarde de la base ------------------------------------------
+    - name: Sauvegarder la base MySQL
+      block:
+        - name: Horodatage
+          ansible.builtin.set_fact:
+            backup_name: "resilience-db-{{ '%Y%m%d-%H%M%S' | strftime }}.sql"
+        - name: Dump via mysqldump dans le conteneur
+          ansible.builtin.shell:
+            cmd: >
+              docker exec {{ mysql_container }} sh -c
+              'MYSQL_PWD="$MYSQL_ROOT_PASSWORD" mysqldump -u root --databases resilience_db'
+              > "{{ project_root }}/backups/{{ backup_name }}"
+          args:
+            creates: "{{ project_root }}/backups/{{ backup_name }}"
+        - name: Chemin de la sauvegarde
+          ansible.builtin.debug:
+            msg: "Sauvegarde ecrite : backups/{{ backup_name }}"
+      tags: [never, backup]
+
+    # --- Diagnostic rapide ----------------------------------------------
+    - name: Etat des conteneurs
+      ansible.builtin.command: docker compose ps
+      args:
+        chdir: "{{ project_root }}"
+      register: ps_out
+      changed_when: false
+      tags: [never, diagnostics]
+
+    - name: Afficher l'etat
+      ansible.builtin.debug:
+        var: ps_out.stdout_lines
+      tags: [never, diagnostics]

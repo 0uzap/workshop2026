@@ -17,3 +17,13 @@ scrape_configs:
     metrics_path: /metrics
     static_configs:
       - targets: ['face-service:9093']
+
+  - job_name: 'remediation'
+    metrics_path: /metrics
+    static_configs:
+      - targets: ['remediation:8080']
+
+  - job_name: 'ml-detector'
+    metrics_path: /metrics
+    static_configs:
+      - targets: ['ml-detector:8000']

@@ -70,6 +70,8 @@ services:
       DB_NAME: resilience_db
       JWT_SECRET: ${JWT_SECRET:?Secret JWT requis}
       PAYMENT_REQUIRE_FACE: ${PAYMENT_REQUIRE_FACE:-false}
+      # Jeton du canari interne appele par le moteur de remediation
+      REMEDIATION_TOKEN: ${REMEDIATION_TOKEN:?Jeton de remediation requis}
     security_opt: ["no-new-privileges:true"]
     cap_drop: [ALL]
     depends_on:
@@ -226,8 +228,86 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock
     networks: [remediation-docker]
 
+  # ---------- Assistant d'exploitation (RAG : Ollama + LangChain) ----------
+  # Modele de langage local (<= 8B). Telecharger les modeles apres le up :
+  #   docker exec resilience-ollama ollama pull qwen2.5:3b
+  #   docker exec resilience-ollama ollama pull nomic-embed-text
+  ollama:
+    image: ollama/ollama:0.6.8
+    container_name: resilience-ollama
+    restart: unless-stopped
+    volumes:
+      - ollama_models:/root/.ollama
+    mem_limit: 6g
+    networks: [ai]
+
+  rag:
+    build:
+      context: ./ai/rag
+      dockerfile: Dockerfile
+    container_name: resilience-rag
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:9096:8000"   # interface assistant (local PC Hote)
+    environment:
+      OLLAMA_URL: http://ollama:11434
+      LLM_MODEL: ${RAG_LLM_MODEL:-qwen2.5:3b}
+      EMBED_MODEL: ${RAG_EMBED_MODEL:-nomic-embed-text}
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    depends_on: [ollama]
+    networks: [ai]
+
+  # ---------- Detection d'anomalie (AIOps / ML) ----------
+  # Isolation Forest sur les metriques Prometheus de l'API de paiement.
+  # Expose /status (consomme par la remediation) et /metrics (Grafana).
+  ml-detector:
+    build:
+      context: ./ai/ml
+      dockerfile: Dockerfile
+    container_name: resilience-ml
+    restart: unless-stopped
+    environment:
+      PROMETHEUS_URL: http://prometheus:9090
+      TARGET_JOB: payment-api
+      TARGET_KEY: backend
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    mem_limit: 512m
+    depends_on: [prometheus]
+    networks: [obs]
+
+  # ---------- Moteur de remediation (reprise autonome / zero-touch) ----------
+  # Surveille les services, decide et agit (restart via proxy restreint,
+  # limite de debit WAF), puis verifie la reprise par un canari metier.
+  remediation:
+    build:
+      context: ./remediation
+      dockerfile: Dockerfile
+    container_name: resilience-remediation
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:9095:8080"   # tableau de supervision (local PC Hote)
+    environment:
+      PORT: 8080
+      REMEDIATION_TOKEN: ${REMEDIATION_TOKEN:?Jeton de remediation requis}
+      DOCKER_RO_HOST: socket-proxy-ro
+      DOCKER_ACTION_HOST: socket-proxy-remediation
+      ML_STATUS_URL: http://ml-detector:8000/status
+      WAF_RATELIMIT_DIR: /waf-ratelimit
+    volumes:
+      # Lecture-ecriture : depose state/active.conf pour l'interrupteur WAF
+      - ./security/waf/ratelimit:/waf-ratelimit:rw
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: [ALL]
+    depends_on: [socket-proxy-ro, socket-proxy-remediation, backend]
+    networks: [obs, docker-api, remediation-docker]
+
 volumes:
   mysql_data:
+  ollama_models:
   prometheus_data:
   grafana_data:
   loki_data:
@@ -246,3 +326,4 @@ networks:
     internal: true
   docker-api:       # API Docker filtree, sans sortie
     internal: true
+  ai:               # Ollama + assistant RAG (sortie internet pour les modeles)

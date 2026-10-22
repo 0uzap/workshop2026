@@ -1,0 +1,7 @@
+fastapi==0.115.12
+uvicorn==0.34.2
+pydantic==2.11.4
+numpy==2.2.5
+# langchain-core est tire par les deux paquets ci-dessous, a une version compatible
+langchain-text-splitters~=0.3.8
+langchain-ollama~=0.3.3

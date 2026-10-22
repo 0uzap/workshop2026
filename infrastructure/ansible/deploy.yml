@@ -1,0 +1,50 @@
+---
+# Deploiement reproductible de la plateforme sur le PC Hote.
+#   ansible-playbook deploy.yml
+- name: Deployer la plateforme Resilience-Alpha
+  hosts: pc_hote
+  gather_facts: false
+
+  tasks:
+    - name: Verifier que Docker est disponible
+      ansible.builtin.command: docker version --format '{{ "{{" }}.Server.Version{{ "}}" }}'
+      register: docker_version
+      changed_when: false
+
+    - name: Afficher la version de Docker
+      ansible.builtin.debug:
+        msg: "Docker Engine {{ docker_version.stdout }}"
+
+    - name: Exiger le fichier .env (secrets, jamais versionne)
+      ansible.builtin.stat:
+        path: "{{ project_root }}/.env"
+      register: env_file
+
+    - name: Arreter si .env est absent
+      ansible.builtin.fail:
+        msg: "Copiez .env.example en .env et renseignez les secrets avant le deploiement."
+      when: not env_file.stat.exists
+
+    - name: Construire et demarrer la stack (docker compose up -d --build)
+      community.docker.docker_compose_v2:
+        project_src: "{{ project_root }}"
+        build: always
+        state: present
+        wait: true
+      register: compose_up
+
+    - name: Attendre que les services exposent une sonde de sante
+      ansible.builtin.uri:
+        url: "{{ item.url }}"
+        status_code: [200]
+      register: probe
+      retries: 30
+      delay: 2
+      until: probe.status == 200
+      loop: "{{ health_checks }}"
+      loop_control:
+        label: "{{ item.name }}"
+
+    - name: Resume
+      ansible.builtin.debug:
+        msg: "Plateforme deployee. Conteneurs geres : {{ compose_up.containers | map(attribute='Name') | list }}"
