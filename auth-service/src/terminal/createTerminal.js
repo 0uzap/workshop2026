@@ -281,17 +281,36 @@ const createTerminal = ({
     };
   };
 
-  /** Abandon volontaire à l'étape du mot de passe (pas pendant l'analyse). */
+  /**
+   * Abandon volontaire : à l'étape du mot de passe, ou pendant une création
+   * de compte (pas pendant l'analyse du visage, pour ne pas esquiver l'échec).
+   */
   const cancel = async (id) => {
     const s = current(id);
-    if (!s || s.phase !== 'awaiting_password') return false;
-    led.set('off');
-    log(s, 'terminal.cancel', { username: s.username });
+    if (!s || !['awaiting_password', 'registering'].includes(s.phase)) return false;
+    if (s.phase === 'awaiting_password') led.set('off');
+    log(s, 'terminal.cancel', { username: s.username, phase: s.phase });
     await end(s);
     return true;
   };
 
-  // ---------------------------------------------------------------- enrôlement
+  // ---------------------------------------------------------------- capture de gabarit
+
+  // Plusieurs images de face, cohérentes entre elles, moyennées en un gabarit
+  const captureTemplate = async (frames) => {
+    const analyses = [];
+
+    for (let i = 0; i < frames; i++) {
+      const analysis = await analyzeFrame();
+      if (!analysis.ok) return { ok: false, reason: analysis.reason };
+      analyses.push(analysis);
+      await sleep(timings.enrollFrameIntervalMs);
+    }
+
+    return matcher.buildTemplate(analyses);
+  };
+
+  // ---------------------------------------------------------------- enrôlement (administrateur)
 
   const startEnrollment = async (targetUserId, actorId) => {
     const s = reserve({ phase: 'enrolling', ctx: {}, targetUserId, actorId });
@@ -310,16 +329,7 @@ const createTerminal = ({
 
   const captureEnrollment = async (id, actorId, frames = 3) => {
     const s = enrollmentSession(id, actorId);
-    const analyses = [];
-
-    for (let i = 0; i < frames; i++) {
-      const analysis = await analyzeFrame();
-      if (!analysis.ok) return { ok: false, reason: analysis.reason };
-      analyses.push(analysis);
-      await sleep(timings.enrollFrameIntervalMs);
-    }
-
-    const result = matcher.buildTemplate(analyses);
+    const result = await captureTemplate(frames);
     if (!result.ok) return result;
 
     await end(s);
@@ -328,6 +338,48 @@ const createTerminal = ({
 
   const cancelEnrollment = async (id, actorId) => end(enrollmentSession(id, actorId));
 
+  // ---------------------------------------------------------------- création de compte
+
+  /**
+   * Création de compte depuis le poste : le visage est capturé par la caméra
+   * du PC Hôte, la personne doit donc être physiquement présente.
+   */
+  const startRegistration = async (username, ctx = {}) => {
+    const s = reserve({
+      phase: 'registering',
+      ctx,
+      username: username.trim().toLowerCase(),
+      displayName: username.trim()
+    });
+    await startCamera(s);
+    log(s, 'terminal.register.start', { username: s.username });
+    later(s, timings.registerTimeoutMs, () => end(s));
+    return { session_id: s.id, timeout_ms: timings.registerTimeoutMs };
+  };
+
+  const captureRegistration = async (id, frames = 3) => {
+    const s = current(id);
+    if (!s || s.phase !== 'registering') {
+      throw new TerminalError(404, 'Session de création de compte expirée, recommencez');
+    }
+
+    // Une seule capture à la fois sur cette session
+    s.phase = 'capturing';
+    try {
+      const result = await captureTemplate(frames);
+      if (!result.ok) {
+        s.phase = 'registering';
+        return { ...result, username: s.displayName };
+      }
+
+      await end(s);
+      return { ok: true, template: result.template, username: s.displayName };
+    } catch (error) {
+      await end(s);
+      throw error;
+    }
+  };
+
   // ---------------------------------------------------------------- caméra / supervision
 
   /** Image courante, uniquement pendant une session caméra active. */
@@ -335,7 +387,9 @@ const createTerminal = ({
     const s = current(id);
     if (!s || !s.cameraOn) return null;
     if (s.phase === 'enrolling' && s.actorId !== actorId) return null;
-    if (!['identifying', 'rejected', 'enrolling'].includes(s.phase)) return null;
+    if (!['identifying', 'rejected', 'enrolling', 'registering', 'capturing'].includes(s.phase)) {
+      return null;
+    }
     return camera.frame();
   };
 
@@ -352,6 +406,8 @@ const createTerminal = ({
     startEnrollment,
     captureEnrollment,
     cancelEnrollment,
+    startRegistration,
+    captureRegistration,
     frame,
     overview
   };

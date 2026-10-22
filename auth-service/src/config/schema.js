@@ -29,7 +29,9 @@ const statements = [
 
 // Colonnes ajoutées aux tables métier existantes
 const columns = [
-  ['users', 'is_active', 'TINYINT(1) NOT NULL DEFAULT 1']
+  ['users', 'is_active', 'TINYINT(1) NOT NULL DEFAULT 1'],
+  // Compte créé depuis le poste, en attente de validation par un administrateur
+  ['users', 'pending_approval', 'TINYINT(1) NOT NULL DEFAULT 0']
 ];
 
 const addMissingColumns = async () => {

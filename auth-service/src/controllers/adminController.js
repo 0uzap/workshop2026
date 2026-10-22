@@ -48,7 +48,7 @@ const me = (req, res) => {
 const listUsers = async (req, res) => {
   try {
     const [users] = await pool.query(
-      `SELECT u.id, u.username, u.role, u.is_active, u.created_at,
+      `SELECT u.id, u.username, u.role, u.is_active, u.pending_approval, u.created_at,
               f.updated_at AS face_enrolled_at,
               IF(g.locked_until > NOW(), g.locked_until, NULL) AS locked_until
        FROM users u
@@ -115,6 +115,8 @@ const updateUser = async (req, res) => {
     if (typeof isActive !== 'boolean') return res.status(400).json({ error: 'is_active invalide' });
     changes.push('is_active = ?');
     values.push(isActive ? 1 : 0);
+    // Activer un compte créé depuis le poste vaut validation
+    if (isActive) changes.push('pending_approval = 0');
   }
 
   if (password !== undefined) {

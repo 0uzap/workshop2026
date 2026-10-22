@@ -62,6 +62,7 @@ const setup = ({ frames = () => FACES.noFace, identities = { alice: ALICE } } = 
       rejectCooldownMs: 60,
       passwordTimeoutMs: 1000,
       enrollTimeoutMs: 1000,
+      registerTimeoutMs: 1000,
       frameIntervalMs: 2,
       enrollFrameIntervalMs: 1
     }
@@ -195,4 +196,46 @@ test('enrôlement : réservé à l\'administrateur qui l\'a lancé', async () =>
   assert.strictEqual(result.ok, true);
   assert.strictEqual(result.targetUserId, 5);
   assert.strictEqual(t.camera.on, false);
+});
+
+test('création de compte : gabarit capturé par la caméra du poste, identifiant conservé', async () => {
+  const t = setup({ frames: () => FACES.aliceFront });
+  const { session_id: id } = await t.terminal.startRegistration('  Bob.Martin ');
+  assert.strictEqual(t.camera.on, true);
+  assert.ok(await t.terminal.frame(id), 'retour caméra disponible pendant la création');
+
+  const result = await t.terminal.captureRegistration(id);
+  assert.strictEqual(result.ok, true);
+  assert.strictEqual(result.username, 'Bob.Martin');
+  assert.strictEqual(result.template.length, 128);
+  assert.strictEqual(t.camera.on, false);
+
+  // Session consommée : pas de seconde capture
+  await assert.rejects(t.terminal.captureRegistration(id), (e) => e.status === 404);
+});
+
+test('création de compte : image inexploitable, nouvel essai possible sur la même session', async () => {
+  let n = 0;
+  const t = setup({ frames: () => (n++ < 1 ? FACES.noFace : FACES.aliceFront) });
+  const { session_id: id } = await t.terminal.startRegistration('bob');
+
+  const first = await t.terminal.captureRegistration(id);
+  assert.deepStrictEqual([first.ok, first.reason], [false, 'no_face']);
+  assert.strictEqual(t.camera.on, true);
+
+  assert.strictEqual((await t.terminal.captureRegistration(id)).ok, true);
+});
+
+test('création de compte annulée : caméra éteinte et poste libéré', async () => {
+  const t = setup();
+  const { session_id: id } = await t.terminal.startRegistration('bob');
+  assert.strictEqual(await t.terminal.cancel(id), true);
+  assert.strictEqual(t.camera.on, false);
+  await t.terminal.startRegistration('carol');
+});
+
+test('annulation impossible pendant l\'analyse du visage (pas d\'esquive du blocage)', async () => {
+  const t = setup({ frames: () => FACES.noFace });
+  const { session_id: id } = await t.identify('alice');
+  assert.strictEqual(await t.terminal.cancel(id), false);
 });

@@ -10,7 +10,8 @@ const ROLE_LABELS = {
 };
 
 const input = 'rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-sm';
-const smallButton = 'rounded-md border border-slate-600 px-2 py-1 text-xs hover:bg-slate-800';
+const smallButton =
+  'rounded-md border border-slate-600 px-2 py-1 text-xs hover:bg-slate-800 disabled:opacity-40';
 
 export default function UsersTab({ token, me }) {
   const [users, setUsers] = useState([]);
@@ -110,7 +111,9 @@ export default function UsersTab({ token, me }) {
                   ) : (ROLE_LABELS[u.role] || u.role)}
                 </td>
                 <td className="py-2 pr-3">
-                  {u.locked_until ? (
+                  {u.pending_approval ? (
+                    <span className="text-amber-300">En attente de validation</span>
+                  ) : u.locked_until ? (
                     <span className="text-red-400">Bloqué</span>
                   ) : u.is_active ? 'Actif' : 'Désactivé'}
                 </td>
@@ -136,7 +139,16 @@ export default function UsersTab({ token, me }) {
                       Supprimer le visage
                     </button>
                   )}
-                  {canWrite && (
+                  {canWrite && u.pending_approval ? (
+                    <button
+                      className={`${smallButton} border-emerald-700 text-emerald-300`}
+                      disabled={u.role === 'user'}
+                      title={u.role === 'user' ? 'Choisissez d’abord un rôle du back-office' : ''}
+                      onClick={() => update(u, { is_active: true }, `Compte ${u.username} validé`)}
+                    >
+                      Valider le compte
+                    </button>
+                  ) : canWrite && (
                     <button
                       className={smallButton}
                       onClick={() => update(

@@ -46,6 +46,7 @@ const terminal = createTerminal({
     rejectCooldownMs: 30_000,
     passwordTimeoutMs: 120_000,
     enrollTimeoutMs: 120_000,
+    registerTimeoutMs: 90_000,
     frameIntervalMs: 150,
     enrollFrameIntervalMs: 400
   }

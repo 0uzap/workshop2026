@@ -1,6 +1,9 @@
 // Le jeton d'accès reste en mémoire (état React), jamais dans localStorage,
 // pour limiter l'impact d'une éventuelle faille XSS.
 
+// Émis quand un appel authentifié est refusé (jeton expiré, compte désactivé)
+export const SESSION_EXPIRED_EVENT = 'resilience:session-expired';
+
 export class ApiError extends Error {
   constructor(status, body) {
     super(body?.error || `Erreur HTTP ${status}`);
@@ -23,6 +26,7 @@ export async function api(path, { method = 'GET', body, token, headers = {} } = 
   if (res.status === 204) return null;
 
   const data = await res.json().catch(() => ({}));
+  if (res.status === 401 && token) window.dispatchEvent(new Event(SESSION_EXPIRED_EVENT));
   if (!res.ok) throw new ApiError(res.status, data);
   return data;
 }

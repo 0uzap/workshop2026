@@ -17,13 +17,13 @@ const formatTime = (date) =>
  *   2. visage reconnu (+ rotation de tête demandée) → saisie du mot de passe ;
  *   3. sinon : 30 s d'attente (LED rouge), puis retour à l'identifiant.
  */
-export default function LoginKiosk({ onToken }) {
+export default function LoginKiosk({ onToken, onRegister, notice = null }) {
   const [step, setStep] = useState('username');
-  const [username, setUsername] = useState('');
+  const [username, setUsername] = useState(notice?.username || '');
   const [password, setPassword] = useState('');
   const [session, setSession] = useState(null);
   const [state, setState] = useState(null);
-  const [message, setMessage] = useState(null);
+  const [message, setMessage] = useState(notice);
   const [countdown, setCountdown] = useState(0);
   const [busy, setBusy] = useState(false);
   const usernameRef = useRef(null);
@@ -233,6 +233,15 @@ export default function LoginKiosk({ onToken }) {
 
       {message && (
         <p className={`text-sm ${message.error ? 'text-red-400' : 'text-emerald-300'}`}>{message.text}</p>
+      )}
+
+      {step === 'username' && (
+        <div className="flex flex-wrap justify-between gap-2 border-t border-slate-800 pt-4 text-sm">
+          <button type="button" onClick={onRegister} className="text-emerald-400 hover:text-emerald-300">
+            Créer un compte
+          </button>
+          <span className="text-slate-500">Mot de passe oublié ? Contactez un administrateur.</span>
+        </div>
       )}
     </div>
   );

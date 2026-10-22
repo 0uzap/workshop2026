@@ -54,16 +54,22 @@ seule caméra : une identification à la fois (HTTP 409 sinon).
 - L'enrôlement d'un visage se fait depuis le back-office (administrateur),
   la personne étant devant la caméra du poste, avec son consentement.
 
-### Premier administrateur
+### Création de compte
 
-Personne ne peut encore se connecter au back-office : le premier compte est
-créé en ligne de commande sur le PC Hôte, avec l'agent caméra démarré.
+Depuis la page de connexion, lien **Créer un compte** : identifiant, mot de
+passe, consentement, puis capture du visage par la caméra du PC Hôte (la
+personne doit être physiquement devant le poste).
 
-```powershell
-docker exec -it resilience-auth node src/cli/bootstrap-admin.js
-```
+- **Premier compte** (aucun administrateur actif) : il devient administrateur
+  et peut se connecter immédiatement. C'est l'amorçage du back-office.
+- **Comptes suivants** : créés désactivés, *en attente de validation*. Un
+  administrateur choisit leur rôle puis clique sur *Valider le compte*.
+  Sans cela, n'importe qui pourrait s'octroyer un accès au back-office.
 
-La commande refuse de s'exécuter si un administrateur avec visage existe déjà.
+Alternative en ligne de commande pour le premier administrateur :
+`docker exec -it resilience-auth node src/cli/bootstrap-admin.js`.
+
+Mot de passe oublié : un administrateur le réinitialise depuis le back-office.
 
 ## API
 
@@ -73,7 +79,9 @@ La commande refuse de s'exécuter si un administrateur avec visage existe déjà
 | GET | `/api/auth/terminal/state` | en-tête `X-Terminal-Session` | Avancement (`identifying`, `awaiting_password`, `rejected`…) |
 | GET | `/api/auth/terminal/frame` | `X-Terminal-Session` | Image JPEG de la caméra pendant l'identification |
 | POST | `/api/auth/terminal/password` | `X-Terminal-Session` | `{password}` → jeton d'accès `amr: ["face","pwd"]` |
-| POST | `/api/auth/terminal/cancel` | `X-Terminal-Session` | Abandon à l'étape du mot de passe |
+| POST | `/api/auth/terminal/cancel` | `X-Terminal-Session` | Abandon (étape du mot de passe ou création de compte) |
+| POST | `/api/auth/terminal/register/start` | public | `{username}` → vérifie la disponibilité, allume la caméra |
+| POST | `/api/auth/terminal/register` | `X-Terminal-Session` | `{password, consent: true}` → capture le visage, crée le compte |
 | GET | `/api/auth/admin/me` | back-office | Compte et permissions |
 | GET/POST | `/api/auth/admin/users` | `users:read` / `users:write` | Liste / création |
 | PATCH | `/api/auth/admin/users/:id` | `users:write` | `{role?, is_active?, password?}` |
